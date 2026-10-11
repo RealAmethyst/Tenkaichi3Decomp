@@ -24,17 +24,21 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+#define XXH_INLINE_ALL
+#include "../../third_party/xxhash/xxhash.h"
 #include "gs_internal.h"
+#include "../../include/port_adx.h"
 
 enum { ADXT_STAT_STOP = 0, ADXT_STAT_PLAYING = 3, ADXT_STAT_PLAYEND = 5 };
 #define MAX_PLAYERS 16
 #define FRAME 18
-#define PAN_AUTO (-128)
 
 typedef struct Player {
     SDL_AudioStream *stream;
     char path[512];         /* the file it plays */
     uint8_t *file;          /* the whole ADX file */
+    float *pcm;            /* optional lossless replacement, same timeline as the ADX */
     uint32_t size, data;    /* file size; offset of the first frame */
     uint32_t channels, rate, total;
     int loop;
@@ -44,7 +48,7 @@ typedef struct Player {
     int hist[2][2];
     int stat, paused;
     int vol;                /* 0.1 dB, 0 = full, -960 and below = silent */
-    int pan[2];             /* per input channel: -15 left .. 15 right, PAN_AUTO */
+    int pan[2];             /* per input channel: -15 left .. 15 right, PORT_ADX_PAN_AUTO */
 } Player;
 
 static Player sPlayers[MAX_PLAYERS];
@@ -152,7 +156,7 @@ static int decode(Player *p, int16_t *out, int frames) {
     float gl[2], gr[2];
 
     for (ch = 0; ch < 2; ch++) { /* pan per input channel */
-        int pan = p->pan[ch] != PAN_AUTO ? p->pan[ch] : p->channels == 1 ? 0 : ch == 0 ? -15 : 15;
+        int pan = p->pan[ch] != PORT_ADX_PAN_AUTO ? p->pan[ch] : p->channels == 1 ? 0 : ch == 0 ? -15 : 15;
         if (sMono) { pan = 0; }
         gl[ch] = pan <= 0 ? 1.0f : (float)(15 - pan) / 15.0f;
         gr[ch] = pan >= 0 ? 1.0f : (float)(15 + pan) / 15.0f;
@@ -209,22 +213,129 @@ static int decode(Player *p, int16_t *out, int frames) {
     return n;
 }
 
+/* Replacements are float WAVs keyed by the entire original ADX's XXH3-128, high word first.
+   Original headers remain authoritative for duration, loops and tick-based game state. No rounding of loop
+   coordinates is allowed. An incompatible or damaged replacement leaves the ADX player untouched. */
+static int load_pcm(Player *p) {
+    extern const char *Port_FileRoot(void);
+    XXH128_hash_t hash = XXH3_128bits(p->file, p->size);
+    char path[1024];
+    FILE *fp;
+    long size;
+    SDL_AudioSpec spec;
+    Uint8 *buf = NULL;
+    Uint32 bytes = 0;
+    uint64_t total, begin = 0, end = 0;
+    uint32_t i;
+    const char *reason = NULL;
+
+    if (snprintf(path, sizeof(path), "%s/audio-overrides/%016llx%016llx.wav", Port_FileRoot(),
+                 (unsigned long long)hash.high64, (unsigned long long)hash.low64) >= (int)sizeof(path)) {
+        fprintf(stderr, "adx: lossless replacement path too long; using original\n");
+        return 0;
+    }
+    fp = fopen(path, "rb");
+    if (fp == NULL) {
+        if (errno != ENOENT || getenv("BT3_SND_VERBOSE") != NULL) {
+            fprintf(stderr, "adx: no lossless replacement %s: %s; using original\n", path, strerror(errno));
+        }
+        return 0;
+    }
+    size = -1;
+    if (fseek(fp, 0, SEEK_END) == 0) { size = ftell(fp); }
+    fclose(fp);
+    if (size < 44 || size > 256 * 1024 * 1024) {
+        reason = "invalid WAV size (maximum 256 MiB)";
+    } else if (!SDL_LoadWAV(path, &spec, &buf, &bytes)) {
+        reason = SDL_GetError();
+    } else if (spec.format != SDL_AUDIO_F32LE || spec.freq != 48000 || spec.channels != (int)p->channels) {
+        reason = "expected 48 kHz float32 WAV with original channel count";
+    } else if (p->rate == 0 || ((uint64_t)p->total * 48000) % p->rate != 0 ||
+               (p->loop && (((uint64_t)p->loopStart * 48000) % p->rate != 0 ||
+                            ((uint64_t)p->loopEnd * 48000) % p->rate != 0))) {
+        reason = "original timeline cannot be represented exactly at 48 kHz";
+    } else {
+        total = (uint64_t)p->total * 48000 / p->rate;
+        if (p->loop) {
+            begin = (uint64_t)p->loopStart * 48000 / p->rate;
+            end = (uint64_t)p->loopEnd * 48000 / p->rate;
+        }
+        if (total == 0 || total * p->channels * sizeof(float) != bytes ||
+            (p->loop && (begin >= end || end > total))) {
+            reason = "WAV duration or original loop bounds do not match";
+        } else {
+            for (i = 0; i < bytes / sizeof(float); i++) {
+                float *samples = (float *)buf;
+                samples[i] = SDL_SwapFloatLE(samples[i]);
+                if (!isfinite(samples[i]) || fabsf(samples[i]) > 1.0f) {
+                    reason = "non-finite or out-of-range PCM sample";
+                    break;
+                }
+            }
+        }
+        if (reason == NULL) {
+            p->pcm = (float *)buf;
+            p->total = (uint32_t)total;
+            p->loopStart = (uint32_t)begin;
+            p->loopEnd = (uint32_t)end;
+            p->rate = 48000;
+            fprintf(stderr, "adx: lossless replacement %s: %u frames, loop %u..%u\n", path, p->total,
+                    p->loopStart, p->loopEnd);
+            return 1;
+        }
+    }
+    fprintf(stderr, "adx: rejected %s: %s; using original ADX\n", path, reason);
+    SDL_free(buf);
+    return 0;
+}
+
+/* Unlike ADX frames, PCM loop boundaries need not be multiples of 32. Fill across the seam without skipping
+   samples or inserting silence, keeping the existing per-channel pan and explicit Mono setting. */
+static int decode_pcm(Player *p, float *out, int count) {
+    int n, ch;
+    float gl[2], gr[2];
+    for (ch = 0; ch < (int)p->channels; ch++) {
+        int pan = p->pan[ch] != PORT_ADX_PAN_AUTO ? p->pan[ch] : p->channels == 1 ? 0 : ch == 0 ? -15 : 15;
+        if (sMono) { pan = 0; }
+        gl[ch] = pan <= 0 ? 1.0f : (float)(15 - pan) / 15.0f;
+        gr[ch] = pan >= 0 ? 1.0f : (float)(15 + pan) / 15.0f;
+    }
+    for (n = 0; n < count; n++) {
+        float l = 0, r = 0;
+        if (p->pos >= (p->loop ? p->loopEnd : p->total)) {
+            if (!p->loop) { break; }
+            p->pos = p->loopStart;
+        }
+        for (ch = 0; ch < (int)p->channels; ch++) {
+            float sample = p->pcm[(size_t)p->pos * p->channels + ch];
+            l += sample * gl[ch];
+            r += sample * gr[ch];
+        }
+        out[n * 2] = l > 1.0f ? 1.0f : l < -1.0f ? -1.0f : l;
+        out[n * 2 + 1] = r > 1.0f ? 1.0f : r < -1.0f ? -1.0f : r;
+        p->pos++;
+    }
+    return n;
+}
+
 /* SDL's audio thread wants `additional` more bytes from this player (the stream is locked while this runs). */
 static void SDLCALL feed(void *user, SDL_AudioStream *stream, int additional, int total) {
     Player *p = user;
     int16_t buf[32 * 2 * 16];
+    float pcm[32 * 2 * 16];
 
     sFeedCalls++;
 
     (void)total;
     while (additional > 0 && p->stat == ADXT_STAT_PLAYING && !p->paused) {
-        int n = decode(p, buf, 16);
+        int n = p->pcm != NULL ? decode_pcm(p, pcm, 512) : decode(p, buf, 16);
+        int bytes = n * (p->pcm != NULL ? 8 : 4);
         if (n == 0) {
             p->stat = ADXT_STAT_PLAYEND;
             break;
         }
-        SDL_PutAudioStreamData(stream, buf, n * 4);
-        additional -= n * 4;
+        SDL_PutAudioStreamData(stream, p->pcm != NULL ? (const void *)pcm : (const void *)buf, bytes);
+        additional -= bytes;
     }
 }
 
@@ -246,6 +357,8 @@ static void stop(Player *p) {
     }
     free(p->file);
     p->file = NULL;
+    SDL_free(p->pcm);
+    p->pcm = NULL;
     p->stat = ADXT_STAT_STOP;
 }
 
@@ -315,13 +428,21 @@ static void start(Player *p, const char *path) {
         fprintf(stderr, "bt3: sound file not found: %s\n", path);
         return;
     }
-    fseek(fp, 0, SEEK_END);
-    size = ftell(fp);
-    fseek(fp, 0, SEEK_SET);
+    if (fseek(fp, 0, SEEK_END) || (size = ftell(fp)) < 0x40 || size > 256 * 1024 * 1024 ||
+        fseek(fp, 0, SEEK_SET)) {
+        fprintf(stderr, "bt3: invalid sound file size: %s\n", path);
+        fclose(fp);
+        return;
+    }
     p->file = malloc((size_t)size);
+    if (p->file == NULL) {
+        fprintf(stderr, "bt3: could not allocate sound file: %s\n", path);
+        fclose(fp);
+        return;
+    }
     p->size = (uint32_t)fread(p->file, 1, (size_t)size, fp);
     fclose(fp);
-    if (p->size < 0x40 || be16(p->file) != 0x8000 || p->file[4] != 3 || p->file[5] != FRAME || p->file[6] != 4 ||
+    if (p->size != (uint32_t)size || be16(p->file) != 0x8000 || p->file[4] != 3 || p->file[5] != FRAME || p->file[6] != 4 ||
         p->file[7] < 1 || p->file[7] > 2 || (p->file[0x13] & 8)) {
         fprintf(stderr, "bt3: %s is not an ADX file of the kind the game uses\n", path);
         free(p->file);
@@ -334,6 +455,13 @@ static void start(Player *p, const char *path) {
     p->rate = be32(p->file + 8);
     p->total = be32(p->file + 12);
     highpass = be16(p->file + 16);
+    if (header < 26 || header > p->size || p->rate < 8000 || p->rate > 192000 ||
+        p->total == 0 || p->total > UINT32_MAX - 31 || highpass >= p->rate / 2 ||
+        ((uint64_t)p->total + 31) / 32 * FRAME * p->channels > p->size - header) {
+        fprintf(stderr, "bt3: invalid or truncated ADX timeline: %s\n", path);
+        stop(p);
+        return;
+    }
     p->loop = 0;
     if (p->file[0x12] == 4 && header >= 0x38 && be32(p->file + 0x24) != 0) {
         p->loopStart = be32(p->file + 0x28);
@@ -354,7 +482,7 @@ static void start(Player *p, const char *path) {
     adx_coefs(highpass, p->rate, &p->c1, &p->c2);
     memset(p->hist, 0, sizeof(p->hist));
     p->pos = 0;
-    spec.format = SDL_AUDIO_S16;
+    spec.format = load_pcm(p) ? SDL_AUDIO_F32 : SDL_AUDIO_S16;
     spec.channels = 2;
     spec.freq = (int)p->rate;
     p->stream = SDL_CreateAudioStream(&spec, NULL);
@@ -384,9 +512,9 @@ void *ADXT_Create(int maxnch, void *work, int worksize) {
     (void)maxnch; (void)work; (void)worksize;
     stop(p); /* (a frame run again after a restore creates its players again: whatever played there ends) */
     memset(p, 0, sizeof(*p));
-    p->pan[0] = p->pan[1] = PAN_AUTO;
+    p->pan[0] = p->pan[1] = PORT_ADX_PAN_AUTO;
     memset(&gPortAdxView[p - sPlayers], 0, sizeof(PortAdxView));
-    gPortAdxView[p - sPlayers].pan[0] = gPortAdxView[p - sPlayers].pan[1] = PAN_AUTO;
+    gPortAdxView[p - sPlayers].pan[0] = gPortAdxView[p - sPlayers].pan[1] = PORT_ADX_PAN_AUTO;
     return p;
 }
 

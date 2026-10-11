@@ -36,3 +36,20 @@ port/build_release/
 /stages/
 /songs/
 /textures/
+
+# Local audio replacements and disc/audio containers are never source assets.
+/audio-overrides/
+*.[iI][sS][oO]
+*.[rR][vV][zZ]
+*.[wW][aA][vV]
+*.[fF][lL][aA][cC]
+*.[mM][pP]3
+*.[oO][gG][gG]
+*.[aA][dD][xX]
+*.[hH][cC][aA]
+*.[vV][aA][gG]
+*.[bB][rR][sS][tT][mM]
+*.[aA][fF][sS]
+*.[aA][wW][bB]
+*.[aA][cC][bB]
+*.[cC][pP][kK]

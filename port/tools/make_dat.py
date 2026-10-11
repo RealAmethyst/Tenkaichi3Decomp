@@ -30,7 +30,7 @@ def main():
             checksum = int(p[1], 16)
     placed = {}
     for l in open(str(exe) + ".map"):
-        m = re.match(r"^\s*\.data\s+0x([0-9a-f]+)\s+0x([0-9a-f]+)\s+\S*obj_data\w*/(\S+)\.o\s*$", l)
+        m = re.match(r"^\s*\.data\s+0x([0-9a-f]+)\s+0x([0-9a-f]+)\s+.*obj_data\w*/(\S+)\.o\s*$", l)
         if m and int(m.group(2), 16):
             placed[m.group(3)] = (int(m.group(1), 16), int(m.group(2), 16))
     records = []

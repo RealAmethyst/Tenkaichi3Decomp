@@ -27,6 +27,10 @@ README = """Dragon Ball Z: Budokai Tenkaichi 3 - PC port (Linux, 64-bit)
    The setup checks it and unpacks the game's data next to this file. About 4 GB are needed.
 3. Press Play. Later, start  Tenkaichi3Decomp  itself (or the setup again, and press Play).
 
+Linux startup speech uses Prism with a running Orca screen reader (DBus support required).
+Prism is included in lib/; its system dependencies include glibmm/giomm-2.68,
+libstdc++ and any additional dependencies reported by ldd lib/libprism.so.
+
 In the game, F1 opens the settings: resolution, widescreen, controls and sound.
 Saves are kept in saves/. A file placed in gamedata/mods/<same path as the original> replaces the original.
 Texture packs (PCSX2 naming, .dds or .png) go into textures/, stages and music from outside the disc into
@@ -169,9 +173,11 @@ def main_win():
 def main():
     exe = ROOT / "port/build/bt3_64"
     setup = ROOT / "Tenkaichi3Decomp-setup"
-    for need in (exe, setup, pathlib.Path(str(exe) + ".map")):
+    prism = ROOT / "port/build/lib/libprism.so"
+    prism_licenses = ROOT / "port/build/licenses/prism"
+    for need in (exe, setup, pathlib.Path(str(exe) + ".map"), prism, prism_licenses):
         if not need.exists():
-            sys.exit(f"missing {need.relative_to(ROOT)}: build first (see the top of this file)")
+            sys.exit(f"missing {need.relative_to(ROOT)}: build first (including port/tools/build_prism.py for speech)")
     if OUT.exists():
         shutil.rmtree(OUT)
     take_program(exe, OUT)
@@ -181,9 +187,11 @@ def main():
     if lib is None:
         sys.exit("libSDL3.so.0 not found")
     shutil.copy2(lib.resolve(), OUT / "lib/libSDL3.so.0")
+    shutil.copy2(prism, OUT / "lib/libprism.so")
     (OUT / "README.txt").write_text(README)
     lic = OUT / "licenses"
     lic.mkdir()
+    shutil.copytree(prism_licenses, lic / "prism")
     shutil.copy2(ROOT / "port/third_party/imgui/LICENSE.txt", lic / "dear-imgui.txt")
     shutil.copy2(ROOT / "port/third_party/newlib_libm/COPYING.NEWLIB", lic / "newlib.txt")
     shutil.copy2(ROOT / "port/third_party/xxhash/LICENSE", lic / "xxhash.txt")
@@ -213,21 +221,22 @@ def portable(out):
     """Says whether the release would run on other people's machines: no CPU level above the baseline demanded
     or used, and no newer C library than Ubuntu 22.04's (2.35). Build with port/release/build_linux.sh to pass."""
     bad = []
-    for f in ("Tenkaichi3Decomp", "Tenkaichi3Decomp-setup", "lib/libSDL3.so.0"):
+    for f in ("Tenkaichi3Decomp", "Tenkaichi3Decomp-setup", "lib/libSDL3.so.0", "lib/libprism.so"):
         note = subprocess.run(["readelf", "-n", str(out / f)], capture_output=True, text=True).stdout
         need = next((l.split(":", 1)[1].strip() for l in note.splitlines() if "ISA needed" in l), "")
         if any(v in need for v in ("x86-64-v2", "x86-64-v3", "x86-64-v4")):
             bad.append(f"{f}: stamped as needing {need}")
         dis = subprocess.run(["objdump", "-d", str(out / f)], capture_output=True, text=True).stdout
-        if f != "lib/libSDL3.so.0" and ("%ymm" in dis or "%zmm" in dis):
+        if not f.startswith("lib/") and ("%ymm" in dis or "%zmm" in dis):
             bad.append(f"{f}: contains AVX instructions")
-        if "%zmm" in dis:
+        if "%zmm" in dis and f != "lib/libprism.so":  # Prism's simdutf dispatches by CPU at runtime
             bad.append(f"{f}: contains AVX-512 instructions")
         syms = subprocess.run(["objdump", "-T", str(out / f)], capture_output=True, text=True).stdout
         vers = sorted({tuple(int(x) for x in v.split(".")) for v in __import__("re").findall(r"GLIBC_(\d+\.\d+)", syms)})
         if vers and vers[-1] > (2, 35):
             bad.append(f"{f}: needs glibc {vers[-1][0]}.{vers[-1][1]}")
     print("portable: yes (baseline x86-64, glibc <= 2.35)" if not bad else "NOT PORTABLE:\n  " + "\n  ".join(bad))
+    print("Prism's GLIBCXX requirement and system dependencies must also be checked on the release target.")
 
 if os.environ.get("BT3_CC") == "win64":
     main_win()

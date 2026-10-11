@@ -2,6 +2,9 @@
 #include "sys/heap.h"
 #include "sys/pad.h"
 #include "sys/dialog.h"
+#ifdef PORT
+#include "port_accessibility.h"
+#endif
 
 typedef struct DialogProgress {
     /* 0x00 */ u8 unk0[0x14];
@@ -85,6 +88,10 @@ void Dialog_DrawText(void) {
     Flash_ClipGetPos(flash, &ref, &x, &y);
     alpha = Flash_ClipGetAlpha(flash, &ref);
     str = DIALOG_TEXT(gDialog->msgTbl, gDialog->msgIdx);
+#ifdef PORT
+    Port_A11yDialogVisibility(alpha > 0.0f);
+    if (alpha > 0.0f) Port_A11yDialogText(1, (u32)str);
+#endif
     lines = Font_CountLines(str);
     switch (gDialog->size) {
     case 0:
@@ -155,6 +162,10 @@ void Dialog_DrawTitle(void) {
     Flash_ClipGetPos(flash, &ref, &x, &y);
     alpha = Flash_ClipGetAlpha(flash, &ref);
     str = DIALOG_TEXT(gDialog->titleTbl, gDialog->titleIdx);
+#ifdef PORT
+    Port_A11yDialogVisibility(alpha > 0.0f);
+    if (alpha > 0.0f) Port_A11yDialogText(0, (u32)str);
+#endif
     Font_PushStyle();
     Font_SetAlign(1);
     Font_SetScaleXY(1.0f, 1.0f);
@@ -190,6 +201,10 @@ void Dialog_DrawBody(void) {
     Flash_ClipGetPos(flash, &ref, &x, &y);
     alpha = Flash_ClipGetAlpha(flash, &ref);
     str = DIALOG_TEXT(gDialog->titleTbl, gDialog->msgIdx);
+#ifdef PORT
+    Port_A11yDialogVisibility(alpha > 0.0f);
+    if (alpha > 0.0f) Port_A11yDialogText(1, (u32)str);
+#endif
     switch (Font_CountLines(str)) {
     case 1:
         y += 0x28;
@@ -267,6 +282,9 @@ void Dialog_Init(u32 *file, u32 *msgTbl, s32 size) {
 
 /* Destroys the animation and frees the window. */
 void Dialog_Term(void) {
+#ifdef PORT
+    Port_A11yDialogClose();
+#endif
     Flash_Destroy(gDialog->flash);
     if (gDialog != NULL) {
         Heap_Free(gDialog);
@@ -284,9 +302,15 @@ void Dialog_Draw(s32 visible) {
     DialogFlash *flash;
     s32 i;
 
+#ifdef PORT
+    Port_A11yDialogFrame();
+#endif
     Flash_Advance(gDialog->flash);
     if ((gDialog->flags & DIALOG_FLAG_CLOSING) && (gDialog->flash[0].flags & 8)) {
         gDialog->flags |= DIALOG_FLAG_CLOSED;
+#ifdef PORT
+        Port_A11yDialogClose();
+#endif
     }
     if (!(gDialog->flags & DIALOG_FLAG_CURSOR_ON) && (gDialog->flash[0].flags & 2)) {
         Dialog_PlayCursorPlate(0, "fl_on_start");
@@ -323,6 +347,10 @@ rect.y0 = i * 0x20;
     gDialog->res.tex0 = visible != 0 ? gDialog->tex0 : NULL;
     Flash_Draw(gDialog->flash);
     Font_FlushAll();
+#ifdef PORT
+    Port_A11yDialogDraw(visible && !(gDialog->flags & DIALOG_FLAG_CLOSED),
+                        gDialog->choices && !(gDialog->flags & DIALOG_FLAG_CLOSING) && (gDialog->flash[0].flags & 2), gDialog->cursor);
+#endif
 }
 
 /* Opens (0), closes (1) or shows without animation-in (2) the window; open and close play SE 4 / 5. */
@@ -334,6 +362,9 @@ void Dialog_Start(s32 cmd) {
         }
         gDialog->flags = DIALOG_FLAG_OPEN;
         gDialog->cursor = gDialog->defCursor;
+#ifdef PORT
+        Port_A11yDialogOpen();
+#endif
         switch (gDialog->size) {
         case 0:
             Flash_GotoLabel(gDialog->flash, "fl_window_s_in", 1);
@@ -363,6 +394,9 @@ void Dialog_Start(s32 cmd) {
     case DIALOG_CMD_SHOW:
         gDialog->flags = DIALOG_FLAG_OPEN;
         gDialog->cursor = gDialog->defCursor;
+#ifdef PORT
+        Port_A11yDialogOpen();
+#endif
         switch (gDialog->size) {
         case 0:
             Flash_GotoLabel(gDialog->flash, "fl_window_s_open", 1);

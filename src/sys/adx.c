@@ -1,5 +1,8 @@
 #include "common.h"
 #include "sys/adx.h"
+#ifdef PORT
+#include "port_adx.h"
+#endif
 
 /* CRI ADX */
 extern void ADXM_ExecMain(void);
@@ -206,6 +209,15 @@ s32 Adx_IsStopped(s32 ch) {
 
 /* Sets the pan of both output channels of a player (-0x40..0x40 each). */
 void Adx_SetPan(s32 ch, s32 pan0, s32 pan1) {
+#ifdef PORT
+    /* Centered music retains the recording's channels instead of summing them into both speakers.
+       The decoder still centers mono files and honors the game's mono-output option. */
+    if ((ch == ADX_CH_BGM || ch == ADX_CH_MAP) && pan0 == 0 && pan1 == 0) {
+        ADXT_SetOutPan(gAdxPlayerTbl[ch].adxt, 0, PORT_ADX_PAN_AUTO);
+        ADXT_SetOutPan(gAdxPlayerTbl[ch].adxt, 1, PORT_ADX_PAN_AUTO);
+        return;
+    }
+#endif
     ADXT_SetOutPan(gAdxPlayerTbl[ch].adxt, 0, Adx_ConvPan(pan0));
     ADXT_SetOutPan(gAdxPlayerTbl[ch].adxt, 1, Adx_ConvPan(pan1));
 }

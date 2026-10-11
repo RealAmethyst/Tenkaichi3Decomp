@@ -7,6 +7,24 @@ renderer, sound and input layer underneath; it is not an emulator.
 This repository contains **no game data**. You need your own disc image of that release: the setup reads the
 game's data from it, and it stays on your computer.
 
+## Accessibility fork
+
+This fork adds Linux startup speech through Prism and Orca, including logo text, notices,
+the title menu and startup dialogs. Speech stops when native screen or visibility events
+remove its text. This is startup accessibility; the rest of the menus are not fully accessible.
+
+Music retains its original stereo channels while respecting the game's Mono option.
+Optional local lossless replacements preserve the original audio timeline and loops,
+with fallback to the original recording when a replacement is missing or incompatible.
+No replacement recordings, restoration tools or AI models are included. An importer that
+locates recordings in your own copies of other games is planned for later.
+
+For Linux speech, build the pinned Prism dependency with `python3 port/tools/build_prism.py`.
+It requires CMake, a C++23 compiler, pkg-config, and glibmm/giomm-2.68 development files.
+The script stages the library and its licenses beside the game build. Run Orca with DBus support
+when playing. The existing game build and disc-import instructions below still apply;
+pass `--skip-test` to `install.py` to install without automatically running the game.
+
 ## What works
 
 - The whole game loop: boot, opening movie, menus, saving, fights, split screen.

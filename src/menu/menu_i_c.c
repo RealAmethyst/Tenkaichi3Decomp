@@ -1,6 +1,9 @@
 #include "common.h"
 #include "menu/menu_i.h"
 #include "sys/pad.h"
+#ifdef PORT
+#include "port_accessibility.h"
+#endif
 
 Logo *gLogo = NULL; /* 0x3B590C */
 
@@ -64,6 +67,9 @@ void Logo_Show(u32 *pack, s32 section, s32 frames, s32 fade, s32 skip, s32 inBla
     } else {
         ColorFade_StartIn(0xFF, 0xFF, 0xFF, fade);
     }
+#ifdef PORT
+    Port_A11yLogo(section);
+#endif
     while (1) {
         Gfx_BeginFrame();
         Pad_Update();
@@ -81,6 +87,9 @@ void Logo_Show(u32 *pack, s32 section, s32 frames, s32 fade, s32 skip, s32 inBla
             continue;
         }
         if (ColorFade_IsOutDone()) {
+#ifdef PORT
+            Port_A11yStop();
+#endif
             break;
         }
         if (gLogo->flags & LOGO_FADED_IN) {

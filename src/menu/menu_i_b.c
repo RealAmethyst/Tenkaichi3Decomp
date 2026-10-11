@@ -1,5 +1,8 @@
 #include "common.h"
 #include "menu/menu_i.h"
+#ifdef PORT
+#include "port_accessibility.h"
+#endif
 
 BootCard *gBootCard = NULL; /* 0x3B5908 */
 
@@ -18,6 +21,9 @@ void BootCard_OnFlowDone(void) {
 
 /* Unpacks the screen (section `section` of archive 0) and starts the dialog and card modules. */
 void BootCard_Init(s32 section) {
+#ifdef PORT
+    Port_A11yScope(1);
+#endif
     gBootCard = Heap_Alloc(0x14, 0x20, 0, 2);
     memset(gBootCard, 0, 0x14);
     gBootCard->pack = (u32 *)MPACK_AT(gMenuArc0, section);
@@ -30,6 +36,9 @@ void BootCard_Init(s32 section) {
 
 /* Stops the dialog and card modules and frees the screen. */
 void BootCard_Term(void) {
+#ifdef PORT
+    Port_A11yScope(0);
+#endif
     Dialog_Term();
     McFlow_Term();
     if (gBootCard->res != NULL) {

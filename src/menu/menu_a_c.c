@@ -1,6 +1,9 @@
 #include "common.h"
 #include "menu/menu_a.h"
 #include "sys/pad.h"
+#ifdef PORT
+#include "port_accessibility.h"
+#endif
 
 /* The screen's work (overlay .data, 0x3B0EB8). */
 Title *gTitle = NULL;
@@ -47,6 +50,9 @@ void Title_Idle(s32 *result) {
 void Title_Init(s32 section) {
     MTexRes *res = NULL;
 
+#ifdef PORT
+    Port_A11yScope(1);
+#endif
     if (gMenuArc1 == NULL) {
         gMenuArc1 = File_LoadSync(gProgress->baseFile + 1, NULL, 0);
     }
@@ -108,6 +114,9 @@ void Title_Init(s32 section) {
 void Title_Term(void) {
     s32 i;
 
+#ifdef PORT
+    Port_A11yScope(0);
+#endif
     Dialog_Term();
     McFlow_Term();
     for (i = 0; i < TITLE_FLASH_NUM; i++) {
@@ -201,6 +210,9 @@ void Title_OnCardDone(s32 *result) {
 /* Card flow callback 1 (not done): back to the menu. */
 void Title_OnCardCancel(void) {
     Title_ClipGoto(0, 2, "fl_on_start");
+#ifdef PORT
+    Port_A11yTitleItem(gTitle->cursor, gTitle->itemCount);
+#endif
 }
 
 /* Pad 0: start skips the intro and opens the menu; up / down, confirm. */
@@ -220,6 +232,9 @@ void Title_Input(s32 *result) {
         Title_ClipGoto(0, 1, "fl_on_start");
         gTitle->state = 1;
         gTitle->flags |= TITLE_STARTED;
+#ifdef PORT
+        Port_A11yTitlePrompt();
+#endif
         if (Rand_Range(7) != 0) {
             Voice_PlayWithSubtitle(NULL, TITLE_VOICE_BASE, gTitle->voice);
         } else {
@@ -234,6 +249,9 @@ void Title_Input(s32 *result) {
             Title_ClipGoto(0, 1, "fl_ok");
             Title_ClipGoto(0, 2, "fl_on_start");
             gTitle->state = 2;
+#ifdef PORT
+            Port_A11yTitleItem(gTitle->cursor, gTitle->itemCount);
+#endif
             Voice_PlayWithSubtitle(NULL, TITLE_VOICE_BASE, gTitle->voice + 6);
             Snd_PlaySe(2, 0x38);
         } else {
@@ -251,6 +269,9 @@ void Title_Input(s32 *result) {
                 }
                 Title_ClipGoto(0, 2, "fl_on_start");
                 Snd_PlaySe(1, 0);
+#ifdef PORT
+                Port_A11yTitleItem(gTitle->cursor, gTitle->itemCount);
+#endif
             }
         } else if (gPad[0].gameRepeat & 4) {
             gTitle->idle = 0;
@@ -262,6 +283,9 @@ void Title_Input(s32 *result) {
                 }
                 Title_ClipGoto(0, 2, "fl_on_start");
                 Snd_PlaySe(1, 0);
+#ifdef PORT
+                Port_A11yTitleItem(gTitle->cursor, gTitle->itemCount);
+#endif
             }
         } else if (gPad[0].gamePressed & 0x200) {
             gTitle->idle = 0;
@@ -293,6 +317,9 @@ s32 Title_Run(s32 section) {
 
     Title_Init(section);
     ColorFade_StartIn(0, 0, 0, 0x14);
+#ifdef PORT
+    Port_A11yLegal();
+#endif
     while (1) {
         Gfx_BeginFrame();
         Pad_Update();
@@ -313,6 +340,9 @@ s32 Title_Run(s32 section) {
             continue;
         }
         if (ColorFade_IsOutDone()) {
+#ifdef PORT
+            Port_A11yStop();
+#endif
             break;
         }
         if (gTitle->flags & TITLE_FADED_IN) {
@@ -323,6 +353,9 @@ s32 Title_Run(s32 section) {
         }
     }
     ColorFade_StartIn(0, 0, 0, 0x14);
+#ifdef PORT
+    Port_A11yTitle();
+#endif
     for (;;) {
         Gfx_BeginFrame();
         Pad_Update();
@@ -346,6 +379,9 @@ s32 Title_Run(s32 section) {
             continue;
         }
         if (ColorFade_IsOutDone()) {
+#ifdef PORT
+            Port_A11yStop();
+#endif
             break;
         }
         if (gTitle->flags & TITLE_LEAVING) {

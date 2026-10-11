@@ -263,6 +263,10 @@ def venv_python():
 
 
 def step_split(args):
+    exe = ROOT / "port/build" / ("bt3" if args.bits32 else "bt3_64")
+    if not args.force and not args.rebuild and exe.is_file():
+        Step("Executable data").skip("not needed for the existing build")
+        return
     asm = ROOT / "asm"
     have = (asm / "data").is_dir() and (asm / "dbzp").is_dir() and any((asm / "data").iterdir())
     if not args.force and have:

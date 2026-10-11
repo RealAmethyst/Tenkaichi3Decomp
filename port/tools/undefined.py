@@ -192,7 +192,7 @@ def main():
     argsfile.write_text("\n".join('"' + p.replace('\\', '/') + '"' for p in objs))
     out = subprocess.run([PREFIX + "nm", "-A", "@" + str(argsfile)], capture_output=True, text=True, check=True).stdout
     for l in out.splitlines():
-        m = re.match(r"\S+:\s*([0-9a-f]*)\s+(\w)\s+(\S+)$", l)
+        m = re.match(r".+:\s*([0-9a-f]*)\s+(\w)\s+(\S+)$", l)
         if not m:
             continue
         if m.group(2) == "U":
